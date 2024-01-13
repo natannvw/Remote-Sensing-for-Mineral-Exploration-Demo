@@ -18,7 +18,6 @@ class Raster:
     def datacube(self, value):
         self._datacube = value
 
-    @staticmethod
     def rescale(self: "Raster"):
         gains, offsets = self.get_gains_and_offsets()
 
@@ -26,9 +25,8 @@ class Raster:
 
         return self
 
-    @staticmethod
-    def get_gains_and_offsets(self):
-        band_characterisation = self.metadata_dict["level_X"]["specific"][
+    def get_gains_and_offsets(self: "Raster"):
+        band_characterisation = self.metadata["level_X"]["specific"][
             "bandCharacterisation"
         ]
 
