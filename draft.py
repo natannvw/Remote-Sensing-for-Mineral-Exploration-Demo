@@ -1,5 +1,6 @@
 import os
 from collections import namedtuple
+from typing import List, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -105,6 +106,43 @@ def resample_spectrum(spectrum, desired_wavelengths):
     return resampled
 
 
+def nm2um(wavelength):
+    return wavelength / 1000
+
+
+def get_datacube_by_wavelength_range(
+    datacube, wavelength, min_wavelength, max_wavelength
+) -> np.array:
+    wavelength_indices = np.where(
+        (wavelength >= min_wavelength) & (wavelength <= max_wavelength)
+    )[0]
+
+    datacube_range = datacube[wavelength_indices, :, :]
+
+    return datacube_range
+
+
+def removeBands(
+    raster: Raster,
+    wave_or_band: str,
+    wlrange_or_bandrange: Union[float, int, List[Union[float, int]]],
+) -> Raster:
+    if wave_or_band == "Wavelength":
+        raster.datacube = get_datacube_by_wavelength_range(
+            raster.datacube,
+            raster.wavelength,
+            wlrange_or_bandrange[0],
+            wlrange_or_bandrange[1],
+        )
+
+    elif wave_or_band == "BandNumber":
+        raster.datacube = raster.datacube[
+            wlrange_or_bandrange[0] : wlrange_or_bandrange[1], :, :
+        ]
+
+    return raster
+
+
 def preprocess(raster: Raster):
     # TODO remove bands by range
     # TODO remove bands by wavelength
@@ -112,8 +150,12 @@ def preprocess(raster: Raster):
     # TODO consider smoothing by Savitzky-Golay filter
     # TODO consider normalizing by continuum removal
     # TODO consider rescale each band to reflectance
-    # TODO convert tu um
 
+    raster.datacube = replace_bad_bands_reflectance(raster.datacube)
+    raster = rescale(raster)
+
+    raster.wavelength = nm2um(raster.wavelength)
+    raster.datacube = removeBands(raster, "Wavelength", [1, 2.5])
     raster.datacube = continuum_removal(raster.datacube)  # TODO
 
     pass
@@ -216,12 +258,12 @@ def get_gains_and_offsets(metadata_dict):
     return np.array(gains, dtype=np.float32), np.array(offsets, dtype=np.float32)
 
 
-def rescale(raster: Raster):
+def rescale(raster: Raster) -> Raster:
     gains, offsets = get_gains_and_offsets(raster.metadata)
 
     raster.datacube = raster.datacube * gains[:, None, None] + offsets[:, None, None]
 
-    raster.datacube = datacube
+    return raster
 
 
 if __name__ == "__main__":
@@ -246,10 +288,6 @@ if __name__ == "__main__":
     )
     plt.figure()
     plt.plot(raster.wavelength, raster.datacube[:, 500, 500])
-
-    raster = rescale(raster)
-
-    replace_bad_bands_reflectance(raster.datacube)
 
     # plt.figure()
     # plt.plot(raster.wavelength, datacube[:, 500, 500])
