@@ -9,7 +9,7 @@ import pysptools.spectro as spectro
 import rasterio
 import torch
 import xmltodict
-from scipy.interpolate import interp1d
+from numba import jit, prange
 from torchmetrics.image import SpectralAngleMapper
 
 
@@ -212,44 +212,83 @@ def get_wavelengths(metadata_dict):
     return np.array(wavelengths, dtype=np.float32)
 
 
-# Function to interpolate a single spectrum
+# def interpolate_spectrum(spectrum, bad_value=-32768):
+#     # Identify the bad values
+#     bad_indices = np.where(spectrum == bad_value)[0]
+
+#     # If all values are bad or no bad values are found, return the original spectrum
+#     if bad_indices.size == 0 or bad_indices.size == spectrum.size:
+#         return spectrum
+
+#     # Identify the good values
+#     good_indices = np.where(spectrum != bad_value)[0]
+#     good_values = spectrum[good_indices]
+
+#     # Create the interpolation function
+#     f_interp = interp1d(
+#         good_indices,
+#         good_values,
+#         kind="linear",
+#         bounds_error=False,
+#         fill_value="extrapolate",
+#     )
+
+#     # Interpolate the bad values
+#     interpolated_values = f_interp(bad_indices)
+
+#     # Replace the bad values in the spectrum
+#     spectrum[bad_indices] = interpolated_values
+
+#     return spectrum
+
+
+@jit(nopython=True)
+def linear_interpolate(indices, values, query_points):
+    # Custom linear interpolation logic
+    result = np.empty(len(query_points))
+    for i, x in enumerate(query_points):
+        if x <= indices[0]:
+            result[i] = values[0]
+        elif x >= indices[-1]:
+            result[i] = values[-1]
+        else:
+            # Find the interval x is in
+            for j in range(len(indices) - 1):
+                if x <= indices[j + 1]:
+                    break
+            # Linearly interpolate
+            x0, x1 = indices[j], indices[j + 1]
+            y0, y1 = values[j], values[j + 1]
+            result[i] = y0 + (x - x0) * (y1 - y0) / (x1 - x0)
+    return result
+
+
+@jit(nopython=True)
 def interpolate_spectrum(spectrum, bad_value=-32768):
-    # Identify the bad values
     bad_indices = np.where(spectrum == bad_value)[0]
 
-    # If all values are bad or no bad values are found, return the original spectrum
     if bad_indices.size == 0 or bad_indices.size == spectrum.size:
         return spectrum
 
-    # Identify the good values
     good_indices = np.where(spectrum != bad_value)[0]
     good_values = spectrum[good_indices]
 
-    # Create the interpolation function
-    f_interp = interp1d(
-        good_indices,
-        good_values,
-        kind="linear",
-        bounds_error=False,
-        fill_value="extrapolate",
-    )
+    # Use the custom linear interpolation
+    interpolated_values = linear_interpolate(good_indices, good_values, bad_indices)
 
-    # Interpolate the bad values
-    interpolated_values = f_interp(bad_indices)
-
-    # Replace the bad values in the spectrum
     spectrum[bad_indices] = interpolated_values
 
     return spectrum
 
 
+@jit(nopython=True, parallel=True)
 def replace_bad_bands_reflectance(datacube):
     # Assuming datacube is a 3D numpy array with shape (bands, rows, columns)
     # and -32768 indicates a bad value that needs to be replaced
 
     # Apply interpolation to each pixel
-    for row in range(datacube.shape[1]):  # TODO parallelize or vectorize
-        for col in range(datacube.shape[2]):
+    for row in prange(datacube.shape[1]):  # TODO parallelize or vectorize
+        for col in prange(datacube.shape[2]):
             datacube[:, row, col] = interpolate_spectrum(datacube[:, row, col])
 
     return datacube
