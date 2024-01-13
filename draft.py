@@ -5,6 +5,7 @@ from typing import List, Union
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import pysptools.spectro as spectro
 import rasterio
 import torch
 import xmltodict
@@ -74,9 +75,24 @@ def get_spectrum(mineral_name: str) -> Spectrum:
     return spectrum
 
 
-def continuum_removal(raster: Raster) -> Raster:
-    # TODO
-    pass
+def continuum_removal(raster: Raster) -> np.array:
+    """
+    Apply convex hull removal to each pixel in a hyperspectral datacube.
+
+    :param datacube: A 3D numpy array representing the hyperspectral datacube (bands, rows, columns).
+    :param wavelengths: A 1D numpy array representing the wavelengths for each band.
+    :return: A 3D numpy array with the convex hull removed from each pixel's spectrum.
+    """
+    bands, rows, cols = raster.datacube.shape
+    # continuum_removed_cube = np.zeros_like(raster.datacube)
+
+    for i in range(rows):
+        for j in range(cols):
+            raster.datacube[:, i, j], _, _ = spectro.convex_hull_removal(
+                raster.datacube[:, i, j], raster.wavelength
+            )
+
+    return raster
 
 
 def sam(raster: Raster, ref_spectrum: Spectrum) -> float:
@@ -144,15 +160,15 @@ def preprocess(raster: Raster):
 
     raster.wavelength = nm2um(raster.wavelength)
 
-    plt.figure()
-    plt.plot(raster.wavelength, raster.datacube[:, 500, 500])
-    print(raster.datacube.shape)
-
     raster = removeBands(raster, "Wavelength", [1, 2.5])
 
-    raster.datacube = continuum_removal(raster.datacube)  # TODO
+    cr_datacube = continuum_removal(raster)  # TODO
 
-    pass
+    plt.figure()
+    plt.plot(raster.wavelength, raster.datacube[:, 500, 500])
+    plt.plot(raster.wavelength, cr_datacube[:, 500, 500])
+
+    return raster
 
 
 def find_metadata_file(tiff_file_path):
@@ -195,11 +211,6 @@ def get_wavelengths(metadata_dict):
 
     return np.array(wavelengths, dtype=np.float32)
 
-
-def replace_bad_bands_reflectance(datacube):
-    # Assuming datacube is a 3D numpy array with shape (bands, rows, columns)
-    # and -32768 indicates a bad value that needs to be replaced
-
     # Function to interpolate a single spectrum
     def interpolate_spectrum(spectrum, bad_value=-32768):
         # Identify the bad values
@@ -230,8 +241,13 @@ def replace_bad_bands_reflectance(datacube):
 
         return spectrum
 
+
+def replace_bad_bands_reflectance(datacube):
+    # Assuming datacube is a 3D numpy array with shape (bands, rows, columns)
+    # and -32768 indicates a bad value that needs to be replaced
+
     # Apply interpolation to each pixel
-    for row in range(datacube.shape[1]):
+    for row in range(datacube.shape[1]):  # TODO parallelize or vectorize
         for col in range(datacube.shape[2]):
             datacube[:, row, col] = interpolate_spectrum(datacube[:, row, col])
 
