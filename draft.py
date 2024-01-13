@@ -5,16 +5,14 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import pysptools.spectro as spectro
 import rasterio
-import torch
 import xmltodict
 from numba import jit, prange
 from pyproj.crs import CRS
+from pysptools.spectro import convex_hull_removal
 from rasterio.io import MemoryFile
 from rasterio.mask import mask
 from scipy.spatial import ConvexHull
-from torchmetrics.image import SpectralAngleMapper
 
 
 class Raster:
@@ -98,11 +96,6 @@ def get_spectrum(mineral_name: str) -> Spectrum:
     return spectrum
 
 
-# @ray.remote
-def process_pixel(pixel, wavelengths):
-    return spectro.convex_hull_removal(pixel, wavelengths)
-
-
 def continuum_remove(wvlns, reflectance):
     """
     Remove continuum from reflectance spectrum.
@@ -137,8 +130,6 @@ def continuum_remove(wvlns, reflectance):
 
 
 def continuum_removal(raster: Raster) -> np.array:
-    # from PerformanceMonitor import PerformanceMonitor
-
     bands, rows, cols = raster.datacube.shape
     reshaped_data = np.reshape(raster.datacube.transpose(1, 2, 0), (rows * cols, bands))
 
@@ -146,16 +137,13 @@ def continuum_removal(raster: Raster) -> np.array:
         # for i in range(1):
         # i, j = 500, 500
         # index = i * cols + j
-        # raster.datacube[:, i, j], _, _ = spectro.convex_hull_removal(
+        # raster.datacube[:, i, j], _, _ = convex_hull_removal(
         #     raster.datacube[:, i, j], raster.wavelength
         # )
-        # perf_monitor = PerformanceMonitor()
-        # perf_monitor.start()
-        reshaped_data[index, :] = continuum_remove(
-            raster.wavelength,
+        reshaped_data[index, :], _, _ = convex_hull_removal(
             reshaped_data[index, :],
+            raster.wavelength,
         )
-        # perf_monitor.stop()
 
     # Reshape back to original shape
     raster.datacube = np.reshape(reshaped_data, (rows, cols, bands)).transpose(2, 0, 1)
@@ -169,18 +157,39 @@ def sam(raster: Raster, ref_spectrum: Spectrum) -> float:
 
 
 def spectralMatch(raster: Raster, ref_spectrum: Spectrum, method: str = "sam") -> float:
-    # TODO make a check for raster or datacube like in my code
     if method == "sam":
+        # from pysptools.classification import SAM
+
+        # sam = SAM()
+        # M_reshaped = np.transpose(M, (1, 2, 0))  # Reshape M to (rows, cols, bands)
+
+        # score = sam.classify(raster.datacube.transpose((1, 2, 0)).astype(np.float64), ref_spectrum.reflectance.reshape(1, -1).astype(np.float64))
+        # # score = sam.classify(np.transpose(raster.datacube, (1, 2, 0)), ref_spectrum.reflectance.reshape(-1, 1))
+
+        import torch
+        from torchmetrics.image import SpectralAngleMapper
+
         raster.datacube = torch.tensor(raster.datacube, dtype=torch.float32)
         ref_spectrum.reflectance = torch.tensor(
             ref_spectrum.reflectance, dtype=torch.float32
         )
+        bands, rows, cols = raster.datacube.shape
+        # ref_spectrum_replicated = ref_spectrum.reflectance.unsqueeze(1).unsqueeze(2).expand(-1, rows, cols)
 
-        sam = SpectralAngleMapper()
+        sam = SpectralAngleMapper(reduction="none")
 
-        score = sam(raster.datacube, ref_spectrum.reflectance, reduction="none")
+        score = sam(
+            raster.datacube.unsqueeze(0),
+            ref_spectrum.reflectance.unsqueeze(0)
+            .unsqueeze(2)
+            .unsqueeze(3)
+            .expand(-1, -1, rows, cols),
+        )
 
-    return score
+        # Get the array inside the tensor
+        score_array = score.numpy().squeeze()
+
+    return score_array
 
 
 def resample_spectrum(spectrum, desired_wavelengths):
@@ -448,6 +457,17 @@ def spectrum_preprocess(spectrum: Spectrum, raster: Raster):
     return spectrum
 
 
+def get_rgb_indices(raster):
+    rgb_wavelengths = [620, 550, 450]  # Replace with the actual RGB wavelengths
+
+    rgb_indices = []
+    for wavelength in rgb_wavelengths:
+        index = np.abs(raster.wavelength - wavelength).argmin()
+        rgb_indices.append(index)
+
+    return rgb_indices
+
+
 if __name__ == "__main__":
     filename = "ENMAP01-____L2A-DT0000025905_20230707T192008Z_001_V010303_20230922T131734Z-SPECTRAL_IMAGE.TIF"
     data_folder = "Data"
@@ -468,6 +488,7 @@ if __name__ == "__main__":
         profile=profile,
         path=raster_path,
     )
+
     plt.figure()
     plt.plot(raster.wavelength, raster.datacube[:, 500, 500])
 
@@ -484,6 +505,51 @@ if __name__ == "__main__":
     plt.plot(ref_spectrum.wavelength, ref_spectrum.reflectance)
 
     # Normalize by continuum removal
-    cr_datacube = continuum_removal(raster)
+    from PerformanceMonitor import PerformanceMonitor
+
+    perf_monitor = PerformanceMonitor()
+    perf_monitor.start()
+    # cr_datacube = continuum_removal(raster)
+    perf_monitor.stop()
 
     sam_score = spectralMatch(raster, ref_spectrum, method="sam")  # TODO
+    threshold = 0.07
+    masked_sam_score = np.ma.masked_greater(sam_score, threshold)
+
+    # Plot the results
+    # RGB from the hyperspectral image
+    raster_for_rgb = Raster(
+        wavelength=wavelength,
+        datacube=datacube,
+        metadata=metadata,
+        profile=profile,
+        path=raster_path,
+    )
+    raster_for_rgb = clip_raster(raster_for_rgb, polygon)
+
+    rgb_indices = get_rgb_indices(raster_for_rgb)  # save this for later
+    red = raster_for_rgb.datacube[rgb_indices[0], :, :]
+    green = raster_for_rgb.datacube[rgb_indices[1], :, :]
+    blue = raster_for_rgb.datacube[rgb_indices[2], :, :]
+    raster_for_rgb.datacube = np.stack([red, green, blue])
+
+    # Normalize the RGB datacube
+    raster_data = raster_for_rgb.datacube
+    raster_data = raster_data.astype(float)  # Convert to float for normalization
+    raster_data /= raster_data.max()  # Normalize to 0-1
+
+    # Rearrange the axes to (height, width, channels)
+    rgb_image = np.transpose(raster_data, (1, 2, 0))
+
+    plt.figure(figsize=(10, 8))
+    plt.imshow(rgb_image)
+    plt.imshow(masked_sam_score, cmap="turbo_r", alpha=0.5)
+    # plt.axis("off")
+
+    target_spec = raster.datacube[:, 230, 260]
+    plt.figure()
+    plt.plot(raster.wavelength, target_spec)
+    plt.plot(raster.wavelength, ref_spectrum.reflectance)
+    plt.legend(["Target", "Reference Spectrum - Kaolinite"])
+    plt.xlabel("Wavelength (um)")
+    plt.ylabel("Reflectance")
