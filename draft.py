@@ -211,35 +211,36 @@ def get_wavelengths(metadata_dict):
 
     return np.array(wavelengths, dtype=np.float32)
 
-    # Function to interpolate a single spectrum
-    def interpolate_spectrum(spectrum, bad_value=-32768):
-        # Identify the bad values
-        bad_indices = np.where(spectrum == bad_value)[0]
 
-        # If all values are bad or no bad values are found, return the original spectrum
-        if bad_indices.size == 0 or bad_indices.size == spectrum.size:
-            return spectrum
+# Function to interpolate a single spectrum
+def interpolate_spectrum(spectrum, bad_value=-32768):
+    # Identify the bad values
+    bad_indices = np.where(spectrum == bad_value)[0]
 
-        # Identify the good values
-        good_indices = np.where(spectrum != bad_value)[0]
-        good_values = spectrum[good_indices]
-
-        # Create the interpolation function
-        f_interp = interp1d(
-            good_indices,
-            good_values,
-            kind="linear",
-            bounds_error=False,
-            fill_value="extrapolate",
-        )
-
-        # Interpolate the bad values
-        interpolated_values = f_interp(bad_indices)
-
-        # Replace the bad values in the spectrum
-        spectrum[bad_indices] = interpolated_values
-
+    # If all values are bad or no bad values are found, return the original spectrum
+    if bad_indices.size == 0 or bad_indices.size == spectrum.size:
         return spectrum
+
+    # Identify the good values
+    good_indices = np.where(spectrum != bad_value)[0]
+    good_values = spectrum[good_indices]
+
+    # Create the interpolation function
+    f_interp = interp1d(
+        good_indices,
+        good_values,
+        kind="linear",
+        bounds_error=False,
+        fill_value="extrapolate",
+    )
+
+    # Interpolate the bad values
+    interpolated_values = f_interp(bad_indices)
+
+    # Replace the bad values in the spectrum
+    spectrum[bad_indices] = interpolated_values
+
+    return spectrum
 
 
 def replace_bad_bands_reflectance(datacube):
