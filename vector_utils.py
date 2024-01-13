@@ -3,6 +3,8 @@ from pyproj.crs import CRS
 from rasterio.io import MemoryFile
 from rasterio.mask import mask
 
+from Raster import Raster
+
 
 def reproject_gdf(
     gdf: gpd.GeoDataFrame, dst_crs=CRS.from_epsg(4326)
