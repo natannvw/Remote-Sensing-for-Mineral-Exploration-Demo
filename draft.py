@@ -4,96 +4,17 @@ from typing import List, Optional, Union
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import rasterio
+import torch
 import xmltodict
 from numba import jit, prange
-from pyproj.crs import CRS
 from pysptools.spectro import convex_hull_removal
-from rasterio.io import MemoryFile
-from rasterio.mask import mask
 from scipy.spatial import ConvexHull
+from torchmetrics.image import SpectralAngleMapper
 
-
-class Raster:
-    def __init__(self, wavelength, datacube, metadata, profile, name=None, path=None):
-        self.wavelength = wavelength
-        self._datacube = datacube
-        self.metadata = metadata
-        self.profile = profile
-        self.name = name
-        self.path = path
-
-    @property
-    def datacube(self):
-        return self._datacube
-
-    @datacube.setter
-    def datacube(self, value):
-        self._datacube = value
-
-
-class Spectrum:
-    def __init__(self, wavelength, reflectance):
-        self._wavelength = wavelength
-        self._reflectance = reflectance
-
-    @property
-    def wavelength(self):
-        return self._wavelength
-
-    @wavelength.setter
-    def wavelength(self, value):
-        self._wavelength = value
-
-    @property
-    def reflectance(self):
-        return self._reflectance
-
-    @reflectance.setter
-    def reflectance(self, value):
-        self._reflectance = value
-
-
-def create_raster(
-    datacube: np.array,
-    profile: dict,
-    wavelength: np.array = None,
-    metadata: dict = None,
-    path: str = None,
-    name: str = None,
-) -> Raster:
-    raster = Raster(
-        wavelength=wavelength,
-        datacube=datacube,
-        metadata=metadata,
-        profile=profile,
-        path=path,
-        name=name,
-    )
-
-    return raster
-
-
-def create_spectrum(wavelength: np.array, reflectance: np.array) -> Spectrum:
-    spectrum = Spectrum(wavelength=wavelength, reflectance=reflectance)
-
-    return spectrum
-
-
-def get_spectrum(mineral_name: str) -> Spectrum:
-    if mineral_name == "kaolinite":  # TODO add more minerals
-        path = r"Spectral Library\Kaolinite.txt"
-        df = pd.read_csv(
-            path, skiprows=2, header=None, names=["wavelength", mineral_name]
-        )
-
-        wavelength = df["wavelength"].to_numpy()
-        reflectance = df[mineral_name].to_numpy()
-
-    spectrum = create_spectrum(wavelength=wavelength, reflectance=reflectance)
-
-    return spectrum
+from Raster import Raster
+from Spectrum import Spectrum
+from vector_utils import clip_raster
 
 
 def continuum_remove(wvlns, reflectance):
@@ -151,30 +72,13 @@ def continuum_removal(raster: Raster) -> np.array:
     return raster
 
 
-def sam(raster: Raster, ref_spectrum: Spectrum) -> float:
-    # TODO
-    pass
-
-
 def spectralMatch(raster: Raster, ref_spectrum: Spectrum, method: str = "sam") -> float:
     if method == "sam":
-        # from pysptools.classification import SAM
-
-        # sam = SAM()
-        # M_reshaped = np.transpose(M, (1, 2, 0))  # Reshape M to (rows, cols, bands)
-
-        # score = sam.classify(raster.datacube.transpose((1, 2, 0)).astype(np.float64), ref_spectrum.reflectance.reshape(1, -1).astype(np.float64))
-        # # score = sam.classify(np.transpose(raster.datacube, (1, 2, 0)), ref_spectrum.reflectance.reshape(-1, 1))
-
-        import torch
-        from torchmetrics.image import SpectralAngleMapper
-
         raster.datacube = torch.tensor(raster.datacube, dtype=torch.float32)
         ref_spectrum.reflectance = torch.tensor(
             ref_spectrum.reflectance, dtype=torch.float32
         )
         bands, rows, cols = raster.datacube.shape
-        # ref_spectrum_replicated = ref_spectrum.reflectance.unsqueeze(1).unsqueeze(2).expand(-1, rows, cols)
 
         sam = SpectralAngleMapper(reduction="none")
 
@@ -190,16 +94,6 @@ def spectralMatch(raster: Raster, ref_spectrum: Spectrum, method: str = "sam") -
         score_array = score.numpy().squeeze()
 
     return score_array
-
-
-def resample_spectrum(spectrum, desired_wavelengths):
-    resampled = np.interp(
-        desired_wavelengths, spectrum.wavelength, spectrum.reflectance
-    )
-    spectrum.wavelength = desired_wavelengths
-    spectrum.reflectance = resampled
-
-    return spectrum
 
 
 def nm2um(wavelength):
@@ -254,7 +148,7 @@ def preprocess(raster: Raster):
     # TODO consider smoothing by Savitzky-Golay filter
 
     raster.datacube = replace_bad_bands_reflectance(raster.datacube)
-    raster = rescale(raster)
+    raster.rescale()
 
     raster.wavelength = nm2um(raster.wavelength)
 
@@ -385,78 +279,6 @@ def replace_bad_bands_reflectance(datacube):
     return datacube
 
 
-def get_gains_and_offsets(metadata_dict):
-    band_characterisation = metadata_dict["level_X"]["specific"]["bandCharacterisation"]
-
-    band_ids = band_characterisation["bandID"]
-
-    # Extracting gain values
-    gains = [band["GainOfBand"] for band in band_ids]
-
-    # Extracting offset values
-    offsets = [band["OffsetOfBand"] for band in band_ids]
-
-    return np.array(gains, dtype=np.float32), np.array(offsets, dtype=np.float32)
-
-
-def rescale(raster: Raster) -> Raster:
-    gains, offsets = get_gains_and_offsets(raster.metadata)
-
-    raster.datacube = raster.datacube * gains[:, None, None] + offsets[:, None, None]
-
-    return raster
-
-
-def clip_raster(raster: Raster, polygon: gpd.GeoDataFrame) -> Raster:
-    polygon = reproject_gdf(polygon, dst_crs=raster.profile["crs"])
-
-    with MemoryFile() as memfile:  # the mask() function expects a Rasterio dataset as the src argument
-        with memfile.open(**raster.profile) as src:
-            src.write(raster.datacube)
-
-            clipped_data, clipped_transform = mask(src, polygon.geometry, crop=True)
-
-    # Update the profile
-    clipped_profile = raster.profile.copy()
-    clipped_profile.update(
-        {
-            "height": clipped_data.shape[1],
-            "width": clipped_data.shape[2],
-            "transform": clipped_transform,
-        }
-    )
-
-    # Assign the clipped data to the object
-    raster.datacube = clipped_data
-    raster.profile = clipped_profile
-
-    return raster
-
-
-def reproject_gdf(
-    gdf: gpd.GeoDataFrame, dst_crs=CRS.from_epsg(4326)
-) -> gpd.GeoDataFrame:
-    """
-    This function takes a GeoDataFrame and a target CRS as input,
-    checks if the CRS of the GeoDataFrame is the same as the target CRS,
-    if not, reprojects the GeoDataFrame to the target CRS.
-    """
-    # Reproject the GeoDataFrame if the CRS does not match
-    if CRS(gdf.crs) != dst_crs:
-        print(f"Reprojecting GeoDataFrame from {gdf.crs} to {dst_crs}")
-        gdf = gdf.to_crs(dst_crs)
-
-    return gdf
-
-
-def spectrum_preprocess(spectrum: Spectrum, raster: Raster):
-    spectrum = resample_spectrum(
-        spectrum=ref_spectrum, desired_wavelengths=raster.wavelength
-    )
-    # spectrum = removeBands(spectrum, "Wavelength", [1, 2.5]) # dont need because it was resampled to raster.wavelength already
-    return spectrum
-
-
 def get_rgb_indices(raster):
     rgb_wavelengths = [620, 550, 450]  # Replace with the actual RGB wavelengths
 
@@ -469,9 +291,11 @@ def get_rgb_indices(raster):
 
 
 if __name__ == "__main__":
-    filename = "ENMAP01-____L2A-DT0000025905_20230707T192008Z_001_V010303_20230922T131734Z-SPECTRAL_IMAGE.TIF"
     data_folder = "Data"
     cuprite_nevada_folder = "Cuprite Nevada"
+
+    filename = "ENMAP01-____L2A-DT0000025905_20230707T192008Z_001_V010303_20230922T131734Z-SPECTRAL_IMAGE.TIF"
+
     raster_path = os.path.join(data_folder, cuprite_nevada_folder, filename)
 
     with rasterio.open(raster_path) as src:
@@ -489,28 +313,25 @@ if __name__ == "__main__":
         path=raster_path,
     )
 
-    plt.figure()
-    plt.plot(raster.wavelength, raster.datacube[:, 500, 500])
-
     polygon_path = os.path.join(data_folder, cuprite_nevada_folder, "ROI.geojson")
 
     polygon = gpd.read_file(polygon_path)
     raster = clip_raster(raster, polygon)
 
-    raster = preprocess(raster)  # TODO
+    raster = preprocess(raster)
 
-    ref_spectrum = get_spectrum(mineral_name="kaolinite")
-    ref_spectrum = spectrum_preprocess(ref_spectrum, raster)
+    ref_spectrum = Spectrum(mineral_name="kaolinite")
+    ref_spectrum.preprocess(desired_wavelengths=raster.wavelength)
 
     plt.plot(ref_spectrum.wavelength, ref_spectrum.reflectance)
 
     # Normalize by continuum removal
-    from PerformanceMonitor import PerformanceMonitor
+    # from PerformanceMonitor import PerformanceMonitor
 
-    perf_monitor = PerformanceMonitor()
-    perf_monitor.start()
-    # cr_datacube = continuum_removal(raster)
-    perf_monitor.stop()
+    # perf_monitor = PerformanceMonitor()
+    # perf_monitor.start()
+    # cr_datacube = continuum_removal(raster)   # TODO need to be parallelized
+    # perf_monitor.stop()
 
     sam_score = spectralMatch(raster, ref_spectrum, method="sam")  # TODO
     threshold = 0.07
@@ -527,10 +348,12 @@ if __name__ == "__main__":
     )
     raster_for_rgb = clip_raster(raster_for_rgb, polygon)
 
-    rgb_indices = get_rgb_indices(raster_for_rgb)  # save this for later
+    rgb_indices = get_rgb_indices(raster_for_rgb)
+
     red = raster_for_rgb.datacube[rgb_indices[0], :, :]
     green = raster_for_rgb.datacube[rgb_indices[1], :, :]
     blue = raster_for_rgb.datacube[rgb_indices[2], :, :]
+
     raster_for_rgb.datacube = np.stack([red, green, blue])
 
     # Normalize the RGB datacube
@@ -544,7 +367,6 @@ if __name__ == "__main__":
     plt.figure(figsize=(10, 8))
     plt.imshow(rgb_image)
     plt.imshow(masked_sam_score, cmap="turbo_r", alpha=0.5)
-    # plt.axis("off")
 
     target_spec = raster.datacube[:, 230, 260]
     plt.figure()
