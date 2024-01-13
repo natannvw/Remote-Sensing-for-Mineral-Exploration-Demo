@@ -1,5 +1,5 @@
 import os
-from typing import List, Union
+from typing import List, Optional, Union
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -13,6 +13,7 @@ from numba import jit, prange
 from pyproj.crs import CRS
 from rasterio.io import MemoryFile
 from rasterio.mask import mask
+from scipy.spatial import ConvexHull
 from torchmetrics.image import SpectralAngleMapper
 
 
@@ -102,7 +103,42 @@ def process_pixel(pixel, wavelengths):
     return spectro.convex_hull_removal(pixel, wavelengths)
 
 
+def continuum_remove(wvlns, reflectance):
+    """
+    Remove continuum from reflectance spectrum.
+
+    :param wvlns: Wavelengths (1D array).
+    :param reflectance: Reflectance values (1D array).
+    :return: Continuum removed reflectance (1D array).
+    """
+    small = 10 * np.finfo(float).eps
+
+    # Extend the wavelengths and reflectance vectors
+    x_ext = np.concatenate(([wvlns[0] - small], wvlns, [wvlns[-1] + small]))
+    v_ext = np.concatenate(([0], reflectance, [0]))
+
+    # Compute the convex hull
+    points = np.vstack((x_ext, v_ext)).T
+    hull = ConvexHull(points)
+    k = hull.vertices
+
+    # Remove the first and last points of the hull and sort
+    k = np.delete(k, [0, -1])
+    k.sort()
+    k -= 1
+
+    # Linear interpolation
+    resampled_spectrum = np.interp(wvlns, wvlns[k], reflectance[k])
+
+    # Continuum removal
+    CR = reflectance / resampled_spectrum
+
+    return CR
+
+
 def continuum_removal(raster: Raster) -> np.array:
+    # from PerformanceMonitor import PerformanceMonitor
+
     bands, rows, cols = raster.datacube.shape
     reshaped_data = np.reshape(raster.datacube.transpose(1, 2, 0), (rows * cols, bands))
 
@@ -113,10 +149,14 @@ def continuum_removal(raster: Raster) -> np.array:
         # raster.datacube[:, i, j], _, _ = spectro.convex_hull_removal(
         #     raster.datacube[:, i, j], raster.wavelength
         # )
-        reshaped_data[index, :], _, _ = spectro.convex_hull_removal(
-            reshaped_data[index, :],
+        # perf_monitor = PerformanceMonitor()
+        # perf_monitor.start()
+        reshaped_data[index, :] = continuum_remove(
             raster.wavelength,
+            reshaped_data[index, :],
         )
+        # perf_monitor.stop()
+
     # Reshape back to original shape
     raster.datacube = np.reshape(reshaped_data, (rows, cols, bands)).transpose(2, 0, 1)
 
@@ -147,8 +187,10 @@ def resample_spectrum(spectrum, desired_wavelengths):
     resampled = np.interp(
         desired_wavelengths, spectrum.wavelength, spectrum.reflectance
     )
+    spectrum.wavelength = desired_wavelengths
+    spectrum.reflectance = resampled
 
-    return resampled
+    return spectrum
 
 
 def nm2um(wavelength):
@@ -156,28 +198,47 @@ def nm2um(wavelength):
 
 
 def removeBands(
-    raster: Raster,
+    object: Optional[Union[Raster, Spectrum]],
     wave_or_band: str,
     wlrange_or_bandrange: Union[float, int, List[Union[float, int]]],
 ) -> Raster:
-    if wave_or_band == "Wavelength":
-        wavelength_indices = np.where(
-            (raster.wavelength >= wlrange_or_bandrange[0])
-            & (raster.wavelength <= wlrange_or_bandrange[1])
-        )[0]
+    if type(object) == Raster:
+        if wave_or_band == "Wavelength":
+            wavelength_indices = np.where(
+                (object.wavelength >= wlrange_or_bandrange[0])
+                & (object.wavelength <= wlrange_or_bandrange[1])
+            )[0]
 
-        raster.wavelength = raster.wavelength[wavelength_indices]
-        raster.datacube = raster.datacube[wavelength_indices, :, :]
+            object.wavelength = object.wavelength[wavelength_indices]
+            object.datacube = object.datacube[wavelength_indices, :, :]
 
-    elif wave_or_band == "BandNumber":
-        raster.wavelength = raster.wavelength[
-            wlrange_or_bandrange[0] : wlrange_or_bandrange[1]
-        ]
-        raster.datacube = raster.datacube[
-            wlrange_or_bandrange[0] : wlrange_or_bandrange[1], :, :
-        ]
+        elif wave_or_band == "BandNumber":
+            object.wavelength = object.wavelength[
+                wlrange_or_bandrange[0] : wlrange_or_bandrange[1]
+            ]
+            object.datacube = object.datacube[
+                wlrange_or_bandrange[0] : wlrange_or_bandrange[1], :, :
+            ]
 
-    return raster
+    elif type(object) == Spectrum:
+        if wave_or_band == "Wavelength":
+            wavelength_indices = np.where(
+                (object.wavelength >= wlrange_or_bandrange[0])
+                & (object.wavelength <= wlrange_or_bandrange[1])
+            )[0]
+
+            object.wavelength = object.wavelength[wavelength_indices]
+            object.reflectance = object.reflectance[wavelength_indices]
+
+        elif wave_or_band == "BandNumber":
+            object.wavelength = object.wavelength[
+                wlrange_or_bandrange[0] : wlrange_or_bandrange[1]
+            ]
+            object.reflectance = object.reflectance[
+                wlrange_or_bandrange[0] : wlrange_or_bandrange[1]
+            ]
+
+    return object
 
 
 def preprocess(raster: Raster):
@@ -379,6 +440,14 @@ def reproject_gdf(
     return gdf
 
 
+def spectrum_preprocess(spectrum: Spectrum, raster: Raster):
+    spectrum = resample_spectrum(
+        spectrum=ref_spectrum, desired_wavelengths=raster.wavelength
+    )
+    # spectrum = removeBands(spectrum, "Wavelength", [1, 2.5]) # dont need because it was resampled to raster.wavelength already
+    return spectrum
+
+
 if __name__ == "__main__":
     filename = "ENMAP01-____L2A-DT0000025905_20230707T192008Z_001_V010303_20230922T131734Z-SPECTRAL_IMAGE.TIF"
     data_folder = "Data"
@@ -410,13 +479,9 @@ if __name__ == "__main__":
     raster = preprocess(raster)  # TODO
 
     ref_spectrum = get_spectrum(mineral_name="kaolinite")
+    ref_spectrum = spectrum_preprocess(ref_spectrum, raster)
 
     plt.plot(ref_spectrum.wavelength, ref_spectrum.reflectance)
-
-    ref_spectrum.reflectance = resample_spectrum(
-        spectrum=ref_spectrum, desired_wavelengths=raster.wavelength
-    )
-    # TODO removeBands to ref_spectrum too
 
     # Normalize by continuum removal
     cr_datacube = continuum_removal(raster)
