@@ -1,5 +1,4 @@
 import os
-from collections import namedtuple
 from typing import List, Union
 
 import matplotlib.pyplot as plt
@@ -7,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pysptools.spectro as spectro
 import rasterio
+import ray
 import torch
 import xmltodict
 from numba import jit, prange
@@ -31,7 +31,26 @@ class Raster:
         self._datacube = value
 
 
-Spectrum = namedtuple("Spectrum", ["wavelength", "reflectance"])
+class Spectrum:
+    def __init__(self, wavelength, reflectance):
+        self._wavelength = wavelength
+        self._reflectance = reflectance
+
+    @property
+    def wavelength(self):
+        return self._wavelength
+
+    @wavelength.setter
+    def wavelength(self, value):
+        self._wavelength = value
+
+    @property
+    def reflectance(self):
+        return self._reflectance
+
+    @reflectance.setter
+    def reflectance(self, value):
+        self._reflectance = value
 
 
 def create_raster(
@@ -75,6 +94,11 @@ def get_spectrum(mineral_name: str) -> Spectrum:
     return spectrum
 
 
+@ray.remote
+def process_pixel(pixel, wavelengths):
+    return spectro.convex_hull_removal(pixel, wavelengths)
+
+
 def continuum_removal(raster: Raster) -> np.array:
     """
     Apply convex hull removal to each pixel in a hyperspectral datacube.
@@ -85,12 +109,26 @@ def continuum_removal(raster: Raster) -> np.array:
     """
     bands, rows, cols = raster.datacube.shape
     # continuum_removed_cube = np.zeros_like(raster.datacube)
+    ray.init()
+    futures = []
 
     for i in range(rows):
         for j in range(cols):
-            raster.datacube[:, i, j], _, _ = spectro.convex_hull_removal(
-                raster.datacube[:, i, j], raster.wavelength
-            )
+            # raster.datacube[:, i, j], _, _ = spectro.convex_hull_removal(
+            #     raster.datacube[:, i, j], raster.wavelength
+            # )
+
+            # Dispatch Ray tasks
+            pixel = raster.datacube[:, i, j]
+            task = process_pixel.remote(pixel, raster.wavelength)
+            futures.append(task)
+
+    # Collect results
+    for i, future in enumerate(futures):
+        row, col = i // cols, i % cols
+        raster.datacube[:, row, col], _, _ = ray.get(future)
+
+    ray.shutdown()
 
     return raster
 
@@ -101,6 +139,7 @@ def sam(raster: Raster, ref_spectrum: Spectrum) -> float:
 
 
 def spectralMatch(raster: Raster, ref_spectrum: Spectrum, method: str = "sam") -> float:
+    # TODO make a check for raster or datacube like in my code
     if method == "sam":
         raster.datacube = torch.tensor(raster.datacube, dtype=torch.float32)
         ref_spectrum.reflectance = torch.tensor(
@@ -153,7 +192,6 @@ def removeBands(
 
 def preprocess(raster: Raster):
     # TODO consider smoothing by Savitzky-Golay filter
-    # TODO consider normalizing by continuum removal
 
     raster.datacube = replace_bad_bands_reflectance(raster.datacube)
     raster = rescale(raster)
@@ -161,12 +199,6 @@ def preprocess(raster: Raster):
     raster.wavelength = nm2um(raster.wavelength)
 
     raster = removeBands(raster, "Wavelength", [1, 2.5])
-
-    cr_datacube = continuum_removal(raster)  # TODO
-
-    plt.figure()
-    plt.plot(raster.wavelength, raster.datacube[:, 500, 500])
-    plt.plot(raster.wavelength, cr_datacube[:, 500, 500])
 
     return raster
 
@@ -212,36 +244,6 @@ def get_wavelengths(metadata_dict):
     return np.array(wavelengths, dtype=np.float32)
 
 
-# def interpolate_spectrum(spectrum, bad_value=-32768):
-#     # Identify the bad values
-#     bad_indices = np.where(spectrum == bad_value)[0]
-
-#     # If all values are bad or no bad values are found, return the original spectrum
-#     if bad_indices.size == 0 or bad_indices.size == spectrum.size:
-#         return spectrum
-
-#     # Identify the good values
-#     good_indices = np.where(spectrum != bad_value)[0]
-#     good_values = spectrum[good_indices]
-
-#     # Create the interpolation function
-#     f_interp = interp1d(
-#         good_indices,
-#         good_values,
-#         kind="linear",
-#         bounds_error=False,
-#         fill_value="extrapolate",
-#     )
-
-#     # Interpolate the bad values
-#     interpolated_values = f_interp(bad_indices)
-
-#     # Replace the bad values in the spectrum
-#     spectrum[bad_indices] = interpolated_values
-
-#     return spectrum
-
-
 @jit(nopython=True)
 def linear_interpolate(indices, values, query_points):
     # Custom linear interpolation logic
@@ -281,13 +283,42 @@ def interpolate_spectrum(spectrum, bad_value=-32768):
     return spectrum
 
 
+#     # Identify the bad values
+#     bad_indices = np.where(spectrum == bad_value)[0]
+
+#     # If all values are bad or no bad values are found, return the original spectrum
+#     if bad_indices.size == 0 or bad_indices.size == spectrum.size:
+#         return spectrum
+
+#     # Identify the good values
+#     good_indices = np.where(spectrum != bad_value)[0]
+#     good_values = spectrum[good_indices]
+
+#     # Create the interpolation function
+#     f_interp = interp1d(
+#         good_indices,
+#         good_values,
+#         kind="linear",
+#         bounds_error=False,
+#         fill_value="extrapolate",
+#     )
+
+#     # Interpolate the bad values
+#     interpolated_values = f_interp(bad_indices)
+
+#     # Replace the bad values in the spectrum
+#     spectrum[bad_indices] = interpolated_values
+
+#     return spectrum
+
+
 @jit(nopython=True, parallel=True)
 def replace_bad_bands_reflectance(datacube):
     # Assuming datacube is a 3D numpy array with shape (bands, rows, columns)
     # and -32768 indicates a bad value that needs to be replaced
 
     # Apply interpolation to each pixel
-    for row in prange(datacube.shape[1]):  # TODO parallelize or vectorize
+    for row in prange(datacube.shape[1]):
         for col in prange(datacube.shape[2]):
             datacube[:, row, col] = interpolate_spectrum(datacube[:, row, col])
 
@@ -348,5 +379,8 @@ if __name__ == "__main__":
     ref_spectrum.reflectance = resample_spectrum(
         spectrum=ref_spectrum, desired_wavelengths=raster.wavelength
     )
+    # TODO removeBands to ref_spectrum too
+
+    cr_datacube = continuum_removal(raster)
 
     sam_score = spectralMatch(raster, ref_spectrum, method="sam")  # TODO
