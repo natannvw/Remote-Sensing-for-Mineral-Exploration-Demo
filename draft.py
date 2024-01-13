@@ -1,12 +1,12 @@
 import os
 from typing import List, Union
 
+import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pysptools.spectro as spectro
 import rasterio
-import ray
 import torch
 import xmltodict
 from numba import jit, prange
@@ -94,41 +94,28 @@ def get_spectrum(mineral_name: str) -> Spectrum:
     return spectrum
 
 
-@ray.remote
+# @ray.remote
 def process_pixel(pixel, wavelengths):
     return spectro.convex_hull_removal(pixel, wavelengths)
 
 
 def continuum_removal(raster: Raster) -> np.array:
-    """
-    Apply convex hull removal to each pixel in a hyperspectral datacube.
-
-    :param datacube: A 3D numpy array representing the hyperspectral datacube (bands, rows, columns).
-    :param wavelengths: A 1D numpy array representing the wavelengths for each band.
-    :return: A 3D numpy array with the convex hull removed from each pixel's spectrum.
-    """
     bands, rows, cols = raster.datacube.shape
-    # continuum_removed_cube = np.zeros_like(raster.datacube)
-    ray.init()
-    futures = []
+    reshaped_data = np.reshape(raster.datacube.transpose(1, 2, 0), (rows * cols, bands))
 
-    for i in range(rows):
-        for j in range(cols):
-            # raster.datacube[:, i, j], _, _ = spectro.convex_hull_removal(
-            #     raster.datacube[:, i, j], raster.wavelength
-            # )
-
-            # Dispatch Ray tasks
-            pixel = raster.datacube[:, i, j]
-            task = process_pixel.remote(pixel, raster.wavelength)
-            futures.append(task)
-
-    # Collect results
-    for i, future in enumerate(futures):
-        row, col = i // cols, i % cols
-        raster.datacube[:, row, col], _, _ = ray.get(future)
-
-    ray.shutdown()
+    for index in range(rows * cols):
+        # for i in range(1):
+        # i, j = 500, 500
+        # index = i * cols + j
+        # raster.datacube[:, i, j], _, _ = spectro.convex_hull_removal(
+        #     raster.datacube[:, i, j], raster.wavelength
+        # )
+        reshaped_data[index, :], _, _ = spectro.convex_hull_removal(
+            reshaped_data[index, :],
+            raster.wavelength,
+        )
+    # Reshape back to original shape
+    raster.datacube = np.reshape(reshaped_data, (rows, cols, bands)).transpose(2, 0, 1)
 
     return raster
 
@@ -347,16 +334,21 @@ def rescale(raster: Raster) -> Raster:
     return raster
 
 
+def clip_raster(raster: Raster, gdf: gpd.GeoDataFrame) -> Raster:
+    # TODO
+    pass
+
+
 if __name__ == "__main__":
     filename = "ENMAP01-____L2A-DT0000025905_20230707T192008Z_001_V010303_20230922T131734Z-SPECTRAL_IMAGE.TIF"
     data_folder = "Data"
     cuprite_nevada_folder = "Cuprite Nevada"
-    path = os.path.join(data_folder, cuprite_nevada_folder, filename)
+    raster_path = os.path.join(data_folder, cuprite_nevada_folder, filename)
 
-    with rasterio.open(path) as src:
+    with rasterio.open(raster_path) as src:
         profile = src.profile
         datacube = src.read()
-        metadata = get_metadata(path)
+        metadata = get_metadata(raster_path)
         wavelength = get_wavelengths(metadata)
 
     # wavelength =
@@ -365,10 +357,14 @@ if __name__ == "__main__":
         datacube=datacube,
         metadata=metadata,
         profile=profile,
-        path=path,
+        path=raster_path,
     )
     plt.figure()
     plt.plot(raster.wavelength, raster.datacube[:, 500, 500])
+
+    polygon_path = os.path.join(data_folder, cuprite_nevada_folder, "ROI.geojson")
+
+    gdf = gpd.read_file(polygon_path)
 
     raster = preprocess(raster)  # TODO
 
@@ -381,6 +377,7 @@ if __name__ == "__main__":
     )
     # TODO removeBands to ref_spectrum too
 
+    # Normalize by continuum removal
     cr_datacube = continuum_removal(raster)
 
     sam_score = spectralMatch(raster, ref_spectrum, method="sam")  # TODO
