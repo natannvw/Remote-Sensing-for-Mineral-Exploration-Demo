@@ -4,9 +4,7 @@ from typing import List, Optional, Union
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
-import rasterio
 import torch
-import xmltodict
 from numba import jit, prange
 from pysptools.spectro import convex_hull_removal
 from scipy.spatial import ConvexHull
@@ -157,47 +155,6 @@ def preprocess(raster: Raster):
     return raster
 
 
-def find_metadata_file(tiff_file_path):
-    directory = os.path.dirname(tiff_file_path)
-
-    xml_filename = os.path.basename(tiff_file_path).replace(
-        "SPECTRAL_IMAGE.TIF", "METADATA.XML"
-    )
-
-    # Search for the XML file in the same directory
-    for file in os.listdir(directory):
-        if file == xml_filename:
-            xml_file_path = os.path.join(directory, file)
-            break
-    else:
-        raise FileNotFoundError("XML file not found.")
-
-    return xml_file_path
-
-
-def get_metadata(tiff_file_path):
-    xml_file_path = find_metadata_file(tiff_file_path)
-
-    with open(xml_file_path, "r", encoding="utf-8") as file:
-        my_xml = file.read()
-
-    # Use xmltodict to parse and convert the XML document
-    metadata_dict = xmltodict.parse(my_xml)
-
-    return metadata_dict
-
-
-def get_wavelengths(metadata_dict):
-    band_characterisation = metadata_dict["level_X"]["specific"]["bandCharacterisation"]
-
-    band_ids = band_characterisation["bandID"]
-
-    # Extracting wavelengthCenterOfBand values
-    wavelengths = [band["wavelengthCenterOfBand"] for band in band_ids]
-
-    return np.array(wavelengths, dtype=np.float32)
-
-
 @jit(nopython=True)
 def linear_interpolate(indices, values, query_points):
     # Custom linear interpolation logic
@@ -298,20 +255,8 @@ if __name__ == "__main__":
 
     raster_path = os.path.join(data_folder, cuprite_nevada_folder, filename)
 
-    with rasterio.open(raster_path) as src:
-        profile = src.profile
-        datacube = src.read()
-        metadata = get_metadata(raster_path)
-        wavelength = get_wavelengths(metadata)
-
     # wavelength =
-    raster = Raster(
-        wavelength=wavelength,
-        datacube=datacube,
-        metadata=metadata,
-        profile=profile,
-        path=raster_path,
-    )
+    raster = Raster(path=raster_path)
 
     polygon_path = os.path.join(data_folder, cuprite_nevada_folder, "ROI.geojson")
 
@@ -339,13 +284,7 @@ if __name__ == "__main__":
 
     # Plot the results
     # RGB from the hyperspectral image
-    raster_for_rgb = Raster(
-        wavelength=wavelength,
-        datacube=datacube,
-        metadata=metadata,
-        profile=profile,
-        path=raster_path,
-    )
+    raster_for_rgb = Raster(path=raster_path)
     raster_for_rgb = clip_raster(raster_for_rgb, polygon)
 
     rgb_indices = get_rgb_indices(raster_for_rgb)
@@ -366,7 +305,7 @@ if __name__ == "__main__":
 
     plt.figure(figsize=(10, 8))
     plt.imshow(rgb_image)
-    plt.imshow(masked_sam_score, cmap="turbo_r", alpha=0.5)
+    plt.imshow(masked_sam_score, cmap="turbo_r")
 
     target_spec = raster.datacube[:, 230, 260]
     plt.figure()
