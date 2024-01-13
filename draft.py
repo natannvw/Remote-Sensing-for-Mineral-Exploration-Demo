@@ -110,32 +110,24 @@ def nm2um(wavelength):
     return wavelength / 1000
 
 
-def get_datacube_by_wavelength_range(
-    datacube, wavelength, min_wavelength, max_wavelength
-) -> np.array:
-    wavelength_indices = np.where(
-        (wavelength >= min_wavelength) & (wavelength <= max_wavelength)
-    )[0]
-
-    datacube_range = datacube[wavelength_indices, :, :]
-
-    return datacube_range
-
-
 def removeBands(
     raster: Raster,
     wave_or_band: str,
     wlrange_or_bandrange: Union[float, int, List[Union[float, int]]],
 ) -> Raster:
     if wave_or_band == "Wavelength":
-        raster.datacube = get_datacube_by_wavelength_range(
-            raster.datacube,
-            raster.wavelength,
-            wlrange_or_bandrange[0],
-            wlrange_or_bandrange[1],
-        )
+        wavelength_indices = np.where(
+            (raster.wavelength >= wlrange_or_bandrange[0])
+            & (raster.wavelength <= wlrange_or_bandrange[1])
+        )[0]
+
+        raster.wavelength = raster.wavelength[wavelength_indices]
+        raster.datacube = raster.datacube[wavelength_indices, :, :]
 
     elif wave_or_band == "BandNumber":
+        raster.wavelength = raster.wavelength[
+            wlrange_or_bandrange[0] : wlrange_or_bandrange[1]
+        ]
         raster.datacube = raster.datacube[
             wlrange_or_bandrange[0] : wlrange_or_bandrange[1], :, :
         ]
@@ -144,18 +136,20 @@ def removeBands(
 
 
 def preprocess(raster: Raster):
-    # TODO remove bands by range
-    # TODO remove bands by wavelength
-    # TODO remove bands by index
     # TODO consider smoothing by Savitzky-Golay filter
     # TODO consider normalizing by continuum removal
-    # TODO consider rescale each band to reflectance
 
     raster.datacube = replace_bad_bands_reflectance(raster.datacube)
     raster = rescale(raster)
 
     raster.wavelength = nm2um(raster.wavelength)
-    raster.datacube = removeBands(raster, "Wavelength", [1, 2.5])
+
+    plt.figure()
+    plt.plot(raster.wavelength, raster.datacube[:, 500, 500])
+    print(raster.datacube.shape)
+
+    raster = removeBands(raster, "Wavelength", [1, 2.5])
+
     raster.datacube = continuum_removal(raster.datacube)  # TODO
 
     pass
@@ -288,9 +282,6 @@ if __name__ == "__main__":
     )
     plt.figure()
     plt.plot(raster.wavelength, raster.datacube[:, 500, 500])
-
-    # plt.figure()
-    # plt.plot(raster.wavelength, datacube[:, 500, 500])
 
     raster = preprocess(raster)  # TODO
 
