@@ -10,9 +10,25 @@ import xmltodict
 from scipy.interpolate import interp1d
 from torchmetrics.image import SpectralAngleMapper
 
-Raster = namedtuple(
-    "Raster", ["wavelength", "datacube", "metadata", "profile", "name", "path"]
-)
+
+class Raster:
+    def __init__(self, wavelength, datacube, metadata, profile, name=None, path=None):
+        self.wavelength = wavelength
+        self._datacube = datacube
+        self.metadata = metadata
+        self.profile = profile
+        self.name = name
+        self.path = path
+
+    @property
+    def datacube(self):
+        return self._datacube
+
+    @datacube.setter
+    def datacube(self, value):
+        self._datacube = value
+
+
 Spectrum = namedtuple("Spectrum", ["wavelength", "reflectance"])
 
 
@@ -186,6 +202,28 @@ def replace_bad_bands_reflectance(datacube):
     return datacube
 
 
+def get_gains_and_offsets(metadata_dict):
+    band_characterisation = metadata_dict["level_X"]["specific"]["bandCharacterisation"]
+
+    band_ids = band_characterisation["bandID"]
+
+    # Extracting gain values
+    gains = [band["GainOfBand"] for band in band_ids]
+
+    # Extracting offset values
+    offsets = [band["OffsetOfBand"] for band in band_ids]
+
+    return np.array(gains, dtype=np.float32), np.array(offsets, dtype=np.float32)
+
+
+def rescale(raster: Raster):
+    gains, offsets = get_gains_and_offsets(raster.metadata)
+
+    raster.datacube = raster.datacube * gains[:, None, None] + offsets[:, None, None]
+
+    raster.datacube = datacube
+
+
 if __name__ == "__main__":
     filename = "ENMAP01-____L2A-DT0000025905_20230707T192008Z_001_V010303_20230922T131734Z-SPECTRAL_IMAGE.TIF"
     data_folder = "Data"
@@ -199,7 +237,7 @@ if __name__ == "__main__":
         wavelength = get_wavelengths(metadata)
 
     # wavelength =
-    raster = create_raster(
+    raster = Raster(
         wavelength=wavelength,
         datacube=datacube,
         metadata=metadata,
@@ -209,10 +247,12 @@ if __name__ == "__main__":
     plt.figure()
     plt.plot(raster.wavelength, raster.datacube[:, 500, 500])
 
-    datacube = replace_bad_bands_reflectance(raster.datacube)
+    raster = rescale(raster)
 
-    plt.figure()
-    plt.plot(raster.wavelength, raster.datacube[:, 500, 500])
+    replace_bad_bands_reflectance(raster.datacube)
+
+    # plt.figure()
+    # plt.plot(raster.wavelength, datacube[:, 500, 500])
 
     raster = preprocess(raster)  # TODO
 
