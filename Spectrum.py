@@ -42,7 +42,7 @@ class Spectrum:
 
         return self
 
-    def preprocess(self, raster):
-        self.resample(desired_wavelengths=raster.wavelength)
+    def preprocess(self, desired_wavelengths):
+        self.resample(desired_wavelengths=desired_wavelengths)
         # self = removeBands(self, "Wavelength", [1, 2.5]) # dont need because it was resampled to raster.wavelength already
         return self
