@@ -5,3 +5,4 @@ Data/Cuprite Nevada/ENMAP01-____L1C-DT0000025905_20230707T192008Z_001_V010303_20
 *.pyc
 *.svg
 *.zip
+.vscode/*
