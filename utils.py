@@ -314,3 +314,5 @@ if __name__ == "__main__":
     plt.legend(["Target", "Reference Spectrum - Kaolinite"])
     plt.xlabel("Wavelength (um)")
     plt.ylabel("Reflectance")
+
+    # TODO map with basemap
