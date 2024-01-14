@@ -1,0 +1,13 @@
+geopandas
+matplotlib
+numpy
+torch
+numba
+pysptools
+scipy
+torchmetrics
+rasterio
+xmltodict
+psutil
+pandas
+pyproj
