@@ -7,12 +7,20 @@ from Raster import Raster
 
 
 def reproject_gdf(
-    gdf: gpd.GeoDataFrame, dst_crs=CRS.from_epsg(4326)
+    gdf: gpd.GeoDataFrame, dst_crs: CRS = CRS.from_epsg(4326)
 ) -> gpd.GeoDataFrame:
     """
     This function takes a GeoDataFrame and a target CRS as input,
     checks if the CRS of the GeoDataFrame is the same as the target CRS,
     if not, reprojects the GeoDataFrame to the target CRS.
+
+    Parameters:
+        gdf (gpd.GeoDataFrame): The input GeoDataFrame to be reprojected.
+        dst_crs (CRS, optional): The target CRS to reproject the GeoDataFrame to.
+            Defaults to EPSG 4326.
+
+    Returns:
+        gpd.GeoDataFrame: The reprojected GeoDataFrame.
     """
     # Reproject the GeoDataFrame if the CRS does not match
     if CRS(gdf.crs) != dst_crs:
@@ -23,6 +31,16 @@ def reproject_gdf(
 
 
 def clip_raster(raster: Raster, polygon: gpd.GeoDataFrame) -> Raster:
+    """
+    Clips a raster using a polygon.
+
+    Args:
+        raster (Raster): The raster to be clipped.
+        polygon (gpd.GeoDataFrame): The polygon used for clipping.
+
+    Returns:
+        Raster: The clipped raster.
+    """
     polygon = reproject_gdf(polygon, dst_crs=raster.profile["crs"])
 
     with MemoryFile() as memfile:  # the mask() function expects a Rasterio dataset as the src argument

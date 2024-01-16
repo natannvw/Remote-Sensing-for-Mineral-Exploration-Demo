@@ -49,6 +49,15 @@ def continuum_remove(wvlns, reflectance):
 
 
 def continuum_removal(raster: Raster) -> np.array:
+    """
+    Applies continuum removal to the input raster datacube.
+
+    Args:
+        raster (Raster): The input raster datacube.
+
+    Returns:
+        np.array: The continuum-removed raster datacube.
+    """
     bands, rows, cols = raster.datacube.shape
     reshaped_data = np.reshape(raster.datacube.transpose(1, 2, 0), (rows * cols, bands))
 
@@ -71,6 +80,17 @@ def continuum_removal(raster: Raster) -> np.array:
 
 
 def spectralMatch(raster: Raster, ref_spectrum: Spectrum, method: str = "sam") -> float:
+    """
+    Calculate the spectral match score between a raster datacube and a reference spectrum.
+
+    Args:
+        raster (Raster): The raster datacube.
+        ref_spectrum (Spectrum): The reference spectrum.
+        method (str, optional): The method used for calculating the spectral match score. Defaults to "sam".
+
+    Returns:
+            return score_array
+    """
     if method == "sam":
         raster.datacube = torch.tensor(raster.datacube, dtype=torch.float32)
         ref_spectrum.reflectance = torch.tensor(
@@ -95,6 +115,15 @@ def spectralMatch(raster: Raster, ref_spectrum: Spectrum, method: str = "sam") -
 
 
 def nm2um(wavelength):
+    """
+    Converts a wavelength from nanometers to micrometers.
+
+    Parameters:
+    wavelength (float): The wavelength in nanometers.
+
+    Returns:
+    float: The wavelength in micrometers.
+    """
     return wavelength / 1000
 
 
@@ -103,6 +132,17 @@ def removeBands(
     wave_or_band: str,
     wlrange_or_bandrange: Union[float, int, List[Union[float, int]]],
 ) -> Raster:
+    """
+    Remove bands from a Raster or Spectrum object based on wavelength or band number.
+
+    Args:
+        object (Optional[Union[Raster, Spectrum]]): The object from which bands will be removed.
+        wave_or_band (str): The type of range to use for removing bands. Can be either "Wavelength" or "BandNumber".
+        wlrange_or_bandrange (Union[float, int, List[Union[float, int]]]): The range of wavelengths or band numbers to remove.
+
+    Returns:
+        Raster: The updated Raster object after removing the specified bands.
+    """
     if type(object) == Raster:
         if wave_or_band == "Wavelength":
             wavelength_indices = np.where(
@@ -143,6 +183,15 @@ def removeBands(
 
 
 def preprocess(raster: Raster):
+    """
+    Preprocesses the given raster data.
+
+    Args:
+        raster (Raster): The input raster data.
+
+    Returns:
+        Raster: The preprocessed raster data.
+    """
     # TODO consider smoothing by Savitzky-Golay filter
 
     raster.datacube = replace_bad_bands_reflectance(raster.datacube)
@@ -157,6 +206,17 @@ def preprocess(raster: Raster):
 
 @jit(nopython=True)
 def linear_interpolate(indices, values, query_points):
+    """
+    Perform linear interpolation between given indices and values for the given query points.
+
+    Parameters:
+    indices (array-like): The indices used for interpolation.
+    values (array-like): The corresponding values for the indices.
+    query_points (array-like): The points to be interpolated.
+
+    Returns:
+    array-like: The interpolated values for the query points.
+    """
     # Custom linear interpolation logic
     result = np.empty(len(query_points))
     for i, x in enumerate(query_points):
@@ -178,6 +238,16 @@ def linear_interpolate(indices, values, query_points):
 
 @jit(nopython=True)
 def interpolate_spectrum(spectrum, bad_value=-32768):
+    """
+    Interpolates missing values in a spectrum array using linear interpolation.
+
+    Parameters:
+    spectrum (numpy.ndarray): The input spectrum array.
+    bad_value (int, optional): The value representing missing or bad data. Defaults to -32768.
+
+    Returns:
+    numpy.ndarray: The spectrum array with interpolated values.
+    """
     bad_indices = np.where(spectrum == bad_value)[0]
 
     if bad_indices.size == 0 or bad_indices.size == spectrum.size:
@@ -225,6 +295,15 @@ def interpolate_spectrum(spectrum, bad_value=-32768):
 
 @jit(nopython=True, parallel=True)
 def replace_bad_bands_reflectance(datacube):
+    """
+    Replaces bad bands in a datacube with interpolated values.
+
+    Parameters:
+    datacube (numpy.ndarray): A 3D numpy array with shape (bands, rows, columns) where -32768 indicates a bad value.
+
+    Returns:
+    numpy.ndarray: The datacube with bad bands replaced by interpolated values.
+    """
     # Assuming datacube is a 3D numpy array with shape (bands, rows, columns)
     # and -32768 indicates a bad value that needs to be replaced
 
@@ -237,6 +316,15 @@ def replace_bad_bands_reflectance(datacube):
 
 
 def get_rgb_indices(raster):
+    """
+    Get the indices of the RGB wavelengths in the given raster.
+
+    Args:
+        raster: The raster object containing wavelength information.
+
+    Returns:
+        A list of indices corresponding to the RGB wavelengths in the raster.
+    """
     rgb_wavelengths = [620, 550, 450]  # Replace with the actual RGB wavelengths
 
     rgb_indices = []
