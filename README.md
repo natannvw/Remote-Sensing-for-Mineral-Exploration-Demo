@@ -1,6 +1,15 @@
 # Remote-Sensing-Demo
 Remote sensing python skills demonstration
 
+## Contact and Professional Information
+For any inquiries or professional connections, fill free to reach out to me.
+
+*Background:* Remote Sensing Data Scientist and Algorithm Developer with expertise in ML/DL models, data engineering, and satellite imaging.
+
+---
+
+*Note: This project is part of my professional portfolio at Weizmann Institute of Science and TierraSpec and showcases skills relevant to mineral exploration, space science and agri-tech applications.*
+
 # Geospatial Analysis of Cuprite Nevada for Mineral Exploration Using Hyperspectral Imaging Processing
 
 This repository contains a Jupyter notebook that demonstrates a basic geospatial analysis for mineral exploration in the Cuprite Nevada area. The analysis focuses on processing and analyzing hyperspectral satellite imagery, spectroscopy and geospatial data to identify potential areas for mineral exploration.
