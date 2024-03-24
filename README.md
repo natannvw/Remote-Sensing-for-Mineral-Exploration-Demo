@@ -1,4 +1,4 @@
-# Remote-Sensing-Demo
+# Remote-Sensing-for-Mineral-Exploration-Demo
 Remote sensing python skills demonstration
 
 ## Contact and Professional Information
